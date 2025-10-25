@@ -1,0 +1,9 @@
+# Ignore everything by default
+/*
+
+# Allow only these paths
+!.gitignore
+!website/
+!website-backend/
+!LICENSE
+!README.md
