@@ -27,7 +27,7 @@ function buildServerBlock({ subdomain, hostPort }) {
     "",
     "    proxy_http_version 1.1;",
     "    proxy_set_header Upgrade $http_upgrade;",
-    "    proxy_set_header Connection \"upgrade\";",
+    "    proxy_set_header Connection keep-alive;",
     "  }",
     "}",
     "",
@@ -37,8 +37,8 @@ function buildServerBlock({ subdomain, hostPort }) {
 
 async function writeNginxConf({ subdomain, hostPort }) {
   const confPath = `/etc/nginx/conf.d/apps-${subdomain}.conf`;
-  const content = buildServerBlock({ subdomain, hostPort })
-    .replace(/\$/g, "\\$");
+  // Single quotes in echo prevent shell var expansion; no need to escape $ in content
+  const content = buildServerBlock({ subdomain, hostPort });
   const cmd = `echo '${content}' | sudo tee ${confPath} > /dev/null`;
   await sh(cmd);
   await sh("sudo nginx -t");
@@ -48,7 +48,9 @@ async function writeNginxConf({ subdomain, hostPort }) {
 
 async function ensureCertbot({ subdomain }) {
   try {
-    await sh(`sudo certbot --nginx -d ${subdomain} --redirect --non-interactive --agree-tos`);
+    const email = process.env.CERTBOT_EMAIL && String(process.env.CERTBOT_EMAIL).trim();
+    const emailArg = email ? `-m ${email}` : `--register-unsafely-without-email`;
+    await sh(`sudo certbot --nginx -d ${subdomain} --redirect --non-interactive --agree-tos ${emailArg}`);
     await sh("sudo nginx -t");
     await sh("sudo systemctl reload nginx");
     return { ok: true };
