@@ -32,6 +32,14 @@ function sh(cmd, opts = {}) {
   });
 }
 
+function simpleSlug(s) {
+  return String(s || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || 'app';
+}
+
 // options: { installation, env, dbName }
 // env: APPS_IMAGE, APPS_BASE_HOST, DOCKER_NETWORK, WEBSITE_BACKEND_URL, TENANT_DB_HOST, TENANT_DB_PORT, TENANT_DB_USER, TENANT_DB_PASSWORD
 async function provisionDocker(options) {
@@ -48,6 +56,19 @@ async function provisionDocker(options) {
       .replace('://127.0.0.1', '://host.docker.internal');
   }
   const baseHost = env.APPS_BASE_HOST || 'localhost';
+  const baseDomain = env.BASE_DOMAIN || baseHost;
+  const studioSlug = simpleSlug(installation.studioName || installation.companyName || installation.id);
+  const subdomainHost = baseDomain ? `${studioSlug}.${baseDomain}` : null;
+  const allowedOriginsSet = new Set([
+    `http://${baseHost}:${hostPort}`,
+    `http://${baseHost}:3000`,
+    'http://localhost:3000',
+  ]);
+  if (subdomainHost) {
+    allowedOriginsSet.add(`https://${subdomainHost}`);
+    allowedOriginsSet.add(`http://${subdomainHost}`);
+  }
+  const allowedOrigins = Array.from(allowedOriginsSet).join(',');
 
   const envs = {
     PORT: 8000,
@@ -58,9 +79,9 @@ async function provisionDocker(options) {
     REACT_APP_HOST: baseHost,
     REACT_APP_CLIENT_PORT: 3000,
     REACT_APP_PROTOCOL: 'http',
-    ALLOWED_ORIGINS: `http://${baseHost}:${hostPort},http://${baseHost}:3000,http://localhost:3000` ,
+    ALLOWED_ORIGINS: allowedOrigins,
     // DB per-tenant
-    DB_HOST: env.TENANT_DB_HOST || env.PG_ADMIN_HOST || 'localhost',
+    DB_HOST: env.TENANT_DB_HOST || env.PG_ADMIN_HOST || '172.17.0.1',
     DB_PORT: env.TENANT_DB_PORT || env.PG_ADMIN_PORT || 5432,
     DB_USER: env.TENANT_DB_USER,
     DB_PASSWORD: env.TENANT_DB_PASSWORD,
@@ -71,7 +92,7 @@ async function provisionDocker(options) {
     CONTACT_EMAIL: installation.contactEmail || '',
     APP_ENV: 'production',
     // Seed admin & master data on first boot
-    DB_SEED_ON_START: 'true',
+    DB_SEED_ON_START: String(env.DB_SEED_ON_START || 'true'),
   };
 
   const envArgs = Object.entries(envs)
@@ -85,7 +106,7 @@ async function provisionDocker(options) {
   await sh(`docker rm -f ${containerName}`, { timeout: 5000 }).catch(() => undefined);
 
   await sh(
-    `docker run -d --name ${containerName} -p ${hostPort}:8000 ${networkArg} ${envArgs} ${image}`
+    `docker run -d --restart unless-stopped --name ${containerName} -p ${hostPort}:8000 ${networkArg} ${envArgs} ${image}`
   );
 
   const endpointUrl = `http://${baseHost}:${hostPort}`;

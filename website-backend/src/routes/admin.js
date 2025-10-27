@@ -9,6 +9,7 @@ const { provisionDocker, startDockerContainer, stopDockerContainer, removeDocker
 const { backupInstallationDb, listInstallationBackups, restoreInstallationDb, checkPrereq } = require('../services/dbBackup');
 const path = require('path');
 const fs = require('fs');
+const { setupSubdomainReverseProxy } = require('../services/nginxCertbot');
 const auth = require('../middleware/auth');
 const requireAdmin = require('../middleware/requireAdmin');
 
@@ -237,6 +238,7 @@ router.post('/installations/provision', auth, requireAdmin, async (req, res) => 
         env: {
           APPS_IMAGE: process.env.APPS_IMAGE,
           APPS_BASE_HOST: process.env.APPS_BASE_HOST || 'localhost',
+          BASE_DOMAIN: process.env.BASE_DOMAIN,
           DOCKER_NETWORK: process.env.DOCKER_NETWORK,
           WEBSITE_BACKEND_URL: process.env.WEBSITE_PUBLIC_URL || (process.env.WEBSITE_BACKEND_URL || 'http://localhost:5055'),
           TENANT_DB_HOST: process.env.TENANT_DB_HOST || process.env.PG_ADMIN_HOST || 'localhost',
@@ -244,14 +246,24 @@ router.post('/installations/provision', auth, requireAdmin, async (req, res) => 
           TENANT_DB_USER: process.env.TENANT_DB_USER || process.env.PG_ADMIN_USER,
           TENANT_DB_PASSWORD: process.env.TENANT_DB_PASSWORD || process.env.PG_ADMIN_PASSWORD,
           JWT_SECRET: process.env.JWT_SECRET || 'smood_secret',
+          DB_SEED_ON_START: process.env.DB_SEED_ON_START,
         },
       });
     } else {
       return res.status(400).json({ message: `Driver tidak didukung: ${driver}` });
     }
 
+    const subdomainUrl = subdomain ? `https://${subdomain}` : null;
+    if (process.env.AUTO_NGINX === 'true' && out?.hostPort && subdomain) {
+      try {
+        await setupSubdomainReverseProxy({ subdomain, hostPort: out.hostPort });
+      } catch (err) {
+        console.warn('Auto Nginx+Certbot setup failed', err?.message);
+      }
+    }
+
     // Update installation note/endpoint dan set pending (menunggu heartbeat)
-    const notesObj = { driver, endpointUrl: out?.endpointUrl, containerName: out?.containerName, dbName };
+    const notesObj = { driver, endpointUrl: out?.endpointUrl, subdomainUrl, containerName: out?.containerName, dbName };
     const sNum = Number(seats);
     if (Number.isFinite(sNum) && sNum > 0) notesObj.seats = Math.floor(sNum);
     const notes = JSON.stringify(notesObj);
