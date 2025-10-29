@@ -113,27 +113,28 @@ router.patch('/installations/:id/seats', auth, requireAdmin, async (req, res) =>
     let notes = {};
     try { notes = inst.notes ? (typeof inst.notes === 'string' ? JSON.parse(inst.notes) : inst.notes) : {}; } catch (_) { notes = {}; }
     notes.seats = Math.floor(n);
-    // Use internal Docker endpoint for sync (construct from container info), fallback to external if needed
+    // Use appropriate endpoint for sync based on environment
     let endpointUrl = null;
-    // Try to construct internal endpoint from container info in notes
-    if (notes?.containerName && notes?.dbName) {
-      // Extract port from container name pattern: smood-app-{id}
-      const containerMatch = String(notes.containerName).match(/smood-app-([a-f0-9-]+)/);
-      if (containerMatch) {
-        const installId = containerMatch[1];
-        // Find the port from heartbeat payload or construct localhost:port
-        const hb = await InstallationHeartbeat.findOne({ where: { installationId: inst.id }, order: [['receivedAt', 'DESC']] });
-        if (hb?.payload?.endpointUrl) {
-          // Use the endpoint from heartbeat if available
-          endpointUrl = hb.payload.endpointUrl;
-        } else {
-          // Fallback: construct localhost endpoint (assuming port mapping)
-          // This is a best-effort; in production, heartbeat should provide the correct endpoint
-          endpointUrl = `http://localhost:9000`; // Default port range start
-        }
+
+    // In production/VPS, prefer external HTTPS endpoint for sync
+    if (process.env.NODE_ENV === 'production' || process.env.BASE_DOMAIN) {
+      if (notes.endpointUrl) {
+        endpointUrl = notes.endpointUrl;
+      } else if (inst.subdomain) {
+        endpointUrl = `https://${String(inst.subdomain).replace(/^https?:\/\//, '')}`;
+      }
+    } else {
+      // In development/local, try internal Docker endpoint first
+      const hb = await InstallationHeartbeat.findOne({ where: { installationId: inst.id }, order: [['receivedAt', 'DESC']] });
+      if (hb?.payload?.endpointUrl) {
+        endpointUrl = hb.payload.endpointUrl;
+      } else if (notes?.containerName && notes?.dbName) {
+        // Fallback: construct localhost endpoint for local dev
+        endpointUrl = `http://localhost:9000`;
       }
     }
-    // Fallback to external if internal not available
+
+    // Final fallback to external if nothing else works
     if (!endpointUrl) {
       if (notes.endpointUrl) {
         endpointUrl = notes.endpointUrl;
@@ -341,14 +342,14 @@ router.post('/installations/provision', auth, requireAdmin, async (req, res) => 
     await installation.update(patchInst);
 
     // Sinkronkan maxUsers ke Apps instance jika endpoint tersedia dan seats diisi
-    // Use internal Docker endpoint for sync (from provision output), fallback to external if needed
+    // Use appropriate endpoint based on environment
     let syncEndpointUrl = null;
-    if (out?.endpointUrl) {
-      syncEndpointUrl = out.endpointUrl; // Internal endpoint from Docker provision
-    } else if (notesObj.endpointUrl) {
-      syncEndpointUrl = notesObj.endpointUrl; // From notes
-    } else if (subdomainUrl) {
-      syncEndpointUrl = subdomainUrl; // External fallback
+    if (process.env.NODE_ENV === 'production' || process.env.BASE_DOMAIN) {
+      // In production, use external HTTPS endpoint
+      syncEndpointUrl = subdomainUrl || notesObj.endpointUrl;
+    } else {
+      // In development, use internal Docker endpoint
+      syncEndpointUrl = out?.endpointUrl || notesObj.endpointUrl || subdomainUrl;
     }
 
     if (syncEndpointUrl && typeof notesObj.seats === 'number') {
