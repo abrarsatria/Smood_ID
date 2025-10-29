@@ -6,6 +6,12 @@ const APPS_API_URL = process.env.APPS_API_URL || 'http://localhost:8000';
 const APPS_SERVICE_USERNAME = process.env.APPS_SERVICE_USERNAME || process.env.APPS_USERNAME || '';
 const APPS_SERVICE_PASSWORD = process.env.APPS_SERVICE_PASSWORD || process.env.APPS_PASSWORD || '';
 
+console.log('DEBUG: AppsClient env vars loaded:', {
+  APPS_API_URL,
+  APPS_SERVICE_USERNAME: APPS_SERVICE_USERNAME ? 'SET' : 'NOT_SET',
+  APPS_SERVICE_PASSWORD: APPS_SERVICE_PASSWORD ? 'SET' : 'NOT_SET'
+});
+
 let tokenCache = {
   token: null,
   // naive expiry control; apps token expires in 24h, we refresh on 401 as well
