@@ -15,6 +15,15 @@ const requireAdmin = require('../middleware/requireAdmin');
 
 const router = express.Router();
 
+const FRONTEND_BASE_URL = (process.env.FRONTEND_URL
+  || (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',')[0] : '')
+  || 'http://localhost:3001').replace(/\/$/, '');
+
+router.get('/login', (req, res) => {
+  const target = `${FRONTEND_BASE_URL || 'http://localhost:3001'}/login`;
+  return res.redirect(302, target);
+});
+
 // Health/ping for admin permission check
 router.get('/ping', auth, requireAdmin, (req, res) => {
   return res.json({ ok: true, email: req.user.email });
@@ -101,21 +110,28 @@ router.patch('/installations/:id/seats', auth, requireAdmin, async (req, res) =>
     const inst = await Installation.findByPk(id);
     if (!inst) return res.status(404).json({ message: 'Installation tidak ditemukan' });
 
-    // Simpan ke notes
     let notes = {};
     try { notes = inst.notes ? (typeof inst.notes === 'string' ? JSON.parse(inst.notes) : inst.notes) : {}; } catch (_) { notes = {}; }
     notes.seats = Math.floor(n);
-    const endpointUrl = notes.endpointUrl || null;
+    const endpointFromNotes = notes.endpointUrl || null;
+    const endpointFromSubdomain = inst.subdomain ? `https://${String(inst.subdomain).replace(/^https?:\/\//, '')}` : null;
+    const endpointUrl = endpointFromNotes || endpointFromSubdomain;
+
     await inst.update({ notes: JSON.stringify(notes), seats: notes.seats });
 
-    // Sinkronkan ke Apps jika endpoint diketahui
+    const sync = { attempted: false, success: false, error: null };
     if (endpointUrl) {
+      sync.attempted = true;
       try {
         await requestTo(endpointUrl, 'PATCH', '/api/settings', { data: { maxUsers: notes.seats } });
-      } catch (err) { console.warn('Seats sync failed at update', { endpoint: endpointUrl, error: err?.message }); }
+        sync.success = true;
+      } catch (err) {
+        console.warn('Seats sync failed at update', { endpoint: endpointUrl, error: err?.message });
+        sync.error = err?.response?.data?.message || err?.message || 'Unknown error';
+      }
     }
 
-    return res.json({ ok: true, seats: notes.seats });
+    return res.json({ ok: true, seats: notes.seats, sync });
   } catch (e) {
     return res.status(500).json({ message: 'Gagal update seats', error: e.message });
   }
@@ -140,6 +156,27 @@ router.post('/installations/:id/link-booking', auth, requireAdmin, async (req, r
     return res.json({ ok: true, installationId: inst.id, bookingId: booking.id });
   } catch (e) {
     return res.status(500).json({ message: 'Gagal menautkan booking', error: e.message });
+  }
+});
+
+router.delete('/installations/:id/link-booking', auth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const inst = await Installation.findByPk(id);
+    if (!inst) return res.status(404).json({ message: 'Installation tidak ditemukan' });
+
+    let notes = {};
+    try { notes = inst.notes ? (typeof inst.notes === 'string' ? JSON.parse(inst.notes) : inst.notes) : {}; } catch (_) { notes = {}; }
+    const hadLink = Boolean(notes.bookingId);
+    if ('bookingId' in notes) delete notes.bookingId;
+    if ('bookingEmail' in notes) delete notes.bookingEmail;
+
+    const stringified = Object.keys(notes).length ? JSON.stringify(notes) : null;
+    await inst.update({ notes: stringified });
+
+    return res.json({ ok: true, installationId: inst.id, unlinked: hadLink });
+  } catch (e) {
+    return res.status(500).json({ message: 'Gagal melepas tautan booking', error: e.message });
   }
 });
 // Run/start container for an installation
@@ -263,7 +300,8 @@ router.post('/installations/provision', auth, requireAdmin, async (req, res) => 
     }
 
     // Update installation note/endpoint dan set pending (menunggu heartbeat)
-    const notesObj = { driver, endpointUrl: out?.endpointUrl, subdomainUrl, containerName: out?.containerName, dbName };
+    const endpointUrl = subdomainUrl || out?.endpointUrl || null;
+    const notesObj = { driver, endpointUrl, subdomainUrl, containerName: out?.containerName, dbName };
     const sNum = Number(seats);
     if (Number.isFinite(sNum) && sNum > 0) notesObj.seats = Math.floor(sNum);
     const notes = JSON.stringify(notesObj);
@@ -278,7 +316,7 @@ router.post('/installations/provision', auth, requireAdmin, async (req, res) => 
       } catch (err) { console.warn('Seats sync failed at provision', { endpoint: notesObj.endpointUrl, error: err?.message }); }
     }
 
-    return res.status(201).json({ ok: true, id: installation.id, subdomain, endpointUrl: out?.endpointUrl });
+    return res.status(201).json({ ok: true, id: installation.id, subdomain, endpointUrl });
   } catch (e) {
     console.error('Provision error:', e);
     return res.status(500).json({ message: 'Gagal provision installation', error: e.message });
@@ -343,8 +381,8 @@ router.get('/installations/:id/insight', auth, requireAdmin, async (req, res) =>
       licenseTier: inst.licenseTier,
       licenseStatus: inst.licenseStatus,
       appVersion: inst.appVersion || hb?.appVersion || null,
-      environment: inst.environment || hb?.environment || null,
-      primaryIp: inst.primaryIp || null,
+      environment: inst.environment || hb?.environment || payload?.environment || null,
+      primaryIp: inst.primaryIp || hb?.ipAddress || payload?.ipAddress || payload?.payload?.ipAddress || null,
       instanceName: payload.instanceName || inst.studioName || inst.companyName || null,
       hostname: payload.hostname || null,
       lastSeenAt: inst.lastSeenAt || hb?.receivedAt || null,
@@ -434,7 +472,6 @@ router.get('/bookings', auth, requireAdmin, async (req, res) => {
         ...bj,
         installationName: installation ? (installation.studioName || installation.companyName || null) : null,
         installationAppStatus: installation ? (installation.appStatus || null) : null,
-        installationSubdomain: installation ? (installation.subdomain || null) : null,
         installationEndpointUrl,
       });
     }
@@ -501,8 +538,8 @@ router.get('/installation-insights', auth, requireAdmin, async (req, res) => {
         licenseTier: inst.licenseTier,
         licenseStatus: inst.licenseStatus,
         appVersion: inst.appVersion || hb?.appVersion || null,
-        environment: inst.environment || hb?.environment || null,
-        primaryIp: inst.primaryIp || null,
+        environment: inst.environment || hb?.environment || payload?.environment || null,
+        primaryIp: inst.primaryIp || hb?.ipAddress || payload?.ipAddress || payload?.payload?.ipAddress || null,
         instanceName: payload.instanceName || inst.studioName || inst.companyName || null,
         hostname: payload.hostname || null,
         lastSeenAt: inst.lastSeenAt || hb?.receivedAt || null,
@@ -660,7 +697,14 @@ router.get('/bookings/:id', auth, requireAdmin, async (req, res) => {
         installation = candidates[0] || null;
       }
     }
-    return res.json({ booking, installation });
+    let endpointUrl = null;
+    if (installation) {
+      try {
+        const notes = installation.notes ? (typeof installation.notes === 'string' ? JSON.parse(installation.notes) : installation.notes) : {};
+        endpointUrl = notes?.endpointUrl || null;
+      } catch (_) {}
+    }
+    return res.json({ booking, installation, endpointUrl });
   } catch (e) {
     return res.status(500).json({ message: 'Gagal mengambil detail booking', error: e.message });
   }

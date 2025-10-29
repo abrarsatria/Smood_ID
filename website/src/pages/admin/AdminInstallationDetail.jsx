@@ -362,6 +362,21 @@ export default function AdminInstallationDetail() {
                   {it.bookingEmail && chip(it.bookingEmail, '#e5e7eb')}
                   <button className="btn btn-outline" onClick={() => navigate(`/admin/bookings/${it.bookingId}`)}>Lihat Booking</button>
                   <button className="btn" onClick={() => { setSelectedBookingId(''); setEditLink(true) }}>Ganti Tautan</button>
+                  <button
+                    className="btn btn-outline"
+                    onClick={async () => {
+                      try {
+                        setActionMsg(null)
+                        await axios.delete(`${API_BASE_URL}/api/admin/installations/${id}/link-booking`)
+                        setActionMsg('Tautan booking dilepas')
+                        await refresh()
+                      } catch (e) {
+                        setActionMsg(e?.response?.data?.message || 'Gagal melepas tautan')
+                      }
+                    }}
+                  >
+                    Lepas Tautan
+                  </button>
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>

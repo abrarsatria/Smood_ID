@@ -54,6 +54,10 @@ async function provisionDocker(options) {
     backendUrl = backendUrl
       .replace('://localhost', '://host.docker.internal')
       .replace('://127.0.0.1', '://host.docker.internal');
+
+    if (process.platform === 'linux') {
+      backendUrl = backendUrl.replace('host.docker.internal', '172.17.0.1');
+    }
   }
   const baseHost = env.APPS_BASE_HOST || 'localhost';
   const baseDomain = env.BASE_DOMAIN || baseHost;
@@ -70,21 +74,17 @@ async function provisionDocker(options) {
   }
   const allowedOrigins = Array.from(allowedOriginsSet).join(',');
 
-  // Configure app host and protocol based on whether subdomain is available
-  // If subdomain exists, use HTTPS without port
-  const appHost = subdomainHost || baseHost;
-  const appProtocol = subdomainHost ? 'https' : 'http';
-  const appPort = subdomainHost ? '' : String(hostPort);
-
   const envs = {
     PORT: 8000,
     WEBSITE_BACKEND_URL: backendUrl,
     INSTALLATION_REPORTING: 'true',
     JWT_SECRET: env.JWT_SECRET || 'smood_secret',
     INSTALLATION_ID: installation.id,
-    REACT_APP_HOST: appHost,
-    REACT_APP_CLIENT_PORT: appPort,
-    REACT_APP_PROTOCOL: appProtocol,
+    REACT_APP_DOCKER: 'true', // Flag to indicate Docker environment
+    REACT_APP_HOST: baseHost,
+    REACT_APP_PORT: hostPort, // Set the actual host port
+    REACT_APP_CLIENT_PORT: 3000,
+    REACT_APP_PROTOCOL: 'http',
     ALLOWED_ORIGINS: allowedOrigins,
     // DB per-tenant
     DB_HOST: env.TENANT_DB_HOST || env.PG_ADMIN_HOST || '172.17.0.1',

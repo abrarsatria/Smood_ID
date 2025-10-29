@@ -722,6 +722,7 @@ router.get('/users', auth, async (req, res) => {
       id: u.id,
       username: u.username || u.name || u.fullName || `user-${u.id}`,
       email: u.email || '-',
+      fullName: u.fullName || u.name || u.username || `user-${u.id}`,
     }));
     return res.json({ users });
   } catch (e) {

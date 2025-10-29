@@ -10,13 +10,7 @@ export default function AdminBookingDetail() {
   const [error, setError] = useState(null)
   const [booking, setBooking] = useState(null)
   const [installation, setInstallation] = useState(null)
-  const endpointFromNotes = (inst) => {
-    try {
-      if (!inst?.notes) return null
-      const parsed = typeof inst.notes === 'string' ? JSON.parse(inst.notes) : inst.notes
-      return parsed?.endpointUrl || null
-    } catch (_) { return null }
-  }
+  const [endpointUrl, setEndpointUrl] = useState(null)
   const [actionMsg, setActionMsg] = useState(null)
   const [status, setStatus] = useState('pending')
   const [tier, setTier] = useState('starter')
@@ -46,6 +40,7 @@ export default function AdminBookingDetail() {
         if (!alive) return
         setBooking(data.booking)
         setInstallation(data.installation || null)
+        setEndpointUrl(data.endpointUrl || null)
         setStatus(data.booking?.status || 'pending')
         if (data.installation?.appStatus) setAppStatus(String(data.installation.appStatus))
       } catch (e) {
@@ -63,6 +58,7 @@ export default function AdminBookingDetail() {
     const { data } = await axios.get(`${API_BASE_URL}/api/admin/bookings/${id}?t=${Date.now()}`)
     setBooking(data.booking)
     setInstallation(data.installation || null)
+    setEndpointUrl(data.endpointUrl || null)
     if (data.installation?.appStatus) setAppStatus(String(data.installation.appStatus))
   }
 
@@ -211,18 +207,20 @@ export default function AdminBookingDetail() {
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{installation.studioName}</div>
               </div>
               <div className="feature-card">
-                <div className="muted">Endpoint</div>
-                <div>
-                  {endpointFromNotes(installation) ? (
-                    <a className="nav-link" style={{ padding: 0 }} href={endpointFromNotes(installation)} target="_blank" rel="noreferrer">{endpointFromNotes(installation)}</a>
+                <div className="muted">App Endpoint</div>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>
+                  {endpointUrl ? (
+                    <a href={endpointUrl} target="_blank" rel="noreferrer" className="nav-link" style={{ padding: 0 }}>
+                      {endpointUrl}
+                    </a>
                   ) : (
-                    <a className="nav-link" style={{ padding: 0 }} href={`https://${installation.subdomain}`} target="_blank" rel="noreferrer">{installation.subdomain}</a>
+                    <span className="muted">-</span>
                   )}
                 </div>
               </div>
               <div className="feature-card">
                 <div className="muted">Status Aplikasi</div>
-                <div style={{ fontSize: 18, fontWeight: 700 }}>{chip(installation.appStatus, statusBg(installation.appStatus))}</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{chip(appStatus, statusBg(appStatus))}</div>
               </div>
               <div className="feature-card">
                 <div className="muted">Lisensi</div>
