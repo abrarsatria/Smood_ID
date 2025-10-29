@@ -113,22 +113,53 @@ router.patch('/installations/:id/seats', auth, requireAdmin, async (req, res) =>
     let notes = {};
     try { notes = inst.notes ? (typeof inst.notes === 'string' ? JSON.parse(inst.notes) : inst.notes) : {}; } catch (_) { notes = {}; }
     notes.seats = Math.floor(n);
-    const endpointFromNotes = notes.endpointUrl || null;
-    const endpointFromSubdomain = inst.subdomain ? `https://${String(inst.subdomain).replace(/^https?:\/\//, '')}` : null;
-    const endpointUrl = endpointFromNotes || endpointFromSubdomain;
+    // Use internal Docker endpoint for sync (construct from container info), fallback to external if needed
+    let endpointUrl = null;
+    // Try to construct internal endpoint from container info in notes
+    if (notes?.containerName && notes?.dbName) {
+      // Extract port from container name pattern: smood-app-{id}
+      const containerMatch = String(notes.containerName).match(/smood-app-([a-f0-9-]+)/);
+      if (containerMatch) {
+        const installId = containerMatch[1];
+        // Find the port from heartbeat payload or construct localhost:port
+        const hb = await InstallationHeartbeat.findOne({ where: { installationId: inst.id }, order: [['receivedAt', 'DESC']] });
+        if (hb?.payload?.endpointUrl) {
+          // Use the endpoint from heartbeat if available
+          endpointUrl = hb.payload.endpointUrl;
+        } else {
+          // Fallback: construct localhost endpoint (assuming port mapping)
+          // This is a best-effort; in production, heartbeat should provide the correct endpoint
+          endpointUrl = `http://localhost:9000`; // Default port range start
+        }
+      }
+    }
+    // Fallback to external if internal not available
+    if (!endpointUrl) {
+      if (notes.endpointUrl) {
+        endpointUrl = notes.endpointUrl;
+      } else if (inst.subdomain) {
+        endpointUrl = `https://${String(inst.subdomain).replace(/^https?:\/\//, '')}`;
+      }
+    }
+
+    console.log('DEBUG: Updating seats for installation', { id, newSeats: notes.seats, oldSeats: inst.seats, endpointUrl });
 
     await inst.update({ notes: JSON.stringify(notes), seats: notes.seats });
 
     const sync = { attempted: false, success: false, error: null };
     if (endpointUrl) {
       sync.attempted = true;
+      console.log('DEBUG: Attempting seats sync to Apps', { endpointUrl, maxUsers: notes.seats });
       try {
-        await requestTo(endpointUrl, 'PATCH', '/api/settings', { data: { maxUsers: notes.seats } });
+        const response = await requestTo(endpointUrl, 'PATCH', '/api/settings', { data: { maxUsers: notes.seats } });
+        console.log('DEBUG: Seats sync successful', { endpointUrl, response: response?.data });
         sync.success = true;
       } catch (err) {
-        console.warn('Seats sync failed at update', { endpoint: endpointUrl, error: err?.message });
+        console.warn('Seats sync failed at update', { endpoint: endpointUrl, error: err?.message, response: err?.response?.data });
         sync.error = err?.response?.data?.message || err?.message || 'Unknown error';
       }
+    } else {
+      console.log('DEBUG: No endpoint URL found for seats sync', { endpointFromNotes, endpointFromSubdomain });
     }
 
     return res.json({ ok: true, seats: notes.seats, sync });
@@ -310,10 +341,26 @@ router.post('/installations/provision', auth, requireAdmin, async (req, res) => 
     await installation.update(patchInst);
 
     // Sinkronkan maxUsers ke Apps instance jika endpoint tersedia dan seats diisi
-    if (notesObj.endpointUrl && typeof notesObj.seats === 'number') {
+    // Use internal Docker endpoint for sync (from provision output), fallback to external if needed
+    let syncEndpointUrl = null;
+    if (out?.endpointUrl) {
+      syncEndpointUrl = out.endpointUrl; // Internal endpoint from Docker provision
+    } else if (notesObj.endpointUrl) {
+      syncEndpointUrl = notesObj.endpointUrl; // From notes
+    } else if (subdomainUrl) {
+      syncEndpointUrl = subdomainUrl; // External fallback
+    }
+
+    if (syncEndpointUrl && typeof notesObj.seats === 'number') {
+      console.log('DEBUG: Provision seats sync attempt', { endpoint: syncEndpointUrl, maxUsers: notesObj.seats });
       try {
-        await requestTo(notesObj.endpointUrl, 'PATCH', '/api/settings', { data: { maxUsers: notesObj.seats } });
-      } catch (err) { console.warn('Seats sync failed at provision', { endpoint: notesObj.endpointUrl, error: err?.message }); }
+        const response = await requestTo(syncEndpointUrl, 'PATCH', '/api/settings', { data: { maxUsers: notesObj.seats } });
+        console.log('DEBUG: Provision seats sync successful', { endpoint: syncEndpointUrl, response: response?.data });
+      } catch (err) {
+        console.warn('Seats sync failed at provision', { endpoint: syncEndpointUrl, error: err?.message, response: err?.response?.data });
+      }
+    } else {
+      console.log('DEBUG: Provision seats sync skipped', { endpoint: syncEndpointUrl, seats: notesObj.seats });
     }
 
     return res.status(201).json({ ok: true, id: installation.id, subdomain, endpointUrl });
