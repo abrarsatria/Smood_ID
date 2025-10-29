@@ -16,19 +16,32 @@ const tokenCacheByBase = new Map(); // baseUrl -> { token, obtainedAt }
 
 async function login(baseUrl = APPS_API_URL) {
   if (!APPS_SERVICE_USERNAME || !APPS_SERVICE_PASSWORD) {
+    console.error('APPS service credentials not configured:', { username: APPS_SERVICE_USERNAME ? 'SET' : 'NOT_SET', password: APPS_SERVICE_PASSWORD ? 'SET' : 'NOT_SET' });
     throw new Error('APPS service credentials are not configured');
   }
-  const { data } = await axios.post(`${baseUrl}/api/auth/login`, {
-    username: APPS_SERVICE_USERNAME,
-    password: APPS_SERVICE_PASSWORD,
-  });
-  if (!data?.token) throw new Error('APPS login failed: token missing');
-  if (baseUrl === APPS_API_URL) {
-    tokenCache = { token: data.token, obtainedAt: Date.now() };
-  } else {
-    tokenCacheByBase.set(baseUrl, { token: data.token, obtainedAt: Date.now() });
+  console.log('DEBUG: Attempting login to Apps instance', { baseUrl, username: APPS_SERVICE_USERNAME });
+  try {
+    const { data } = await axios.post(`${baseUrl}/api/auth/login`, {
+      username: APPS_SERVICE_USERNAME,
+      password: APPS_SERVICE_PASSWORD,
+    });
+    console.log('DEBUG: Apps login response received', { hasToken: !!data?.token, baseUrl });
+    if (!data?.token) throw new Error('APPS login failed: token missing');
+    if (baseUrl === APPS_API_URL) {
+      tokenCache = { token: data.token, obtainedAt: Date.now() };
+    } else {
+      tokenCacheByBase.set(baseUrl, { token: data.token, obtainedAt: Date.now() });
+    }
+    return data.token;
+  } catch (err) {
+    console.error('DEBUG: Apps login failed', {
+      baseUrl,
+      username: APPS_SERVICE_USERNAME,
+      error: err?.response?.data || err?.message,
+      status: err?.response?.status
+    });
+    throw err;
   }
-  return data.token;
 }
 
 async function ensureToken(baseUrl = APPS_API_URL) {
